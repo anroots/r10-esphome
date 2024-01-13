@@ -1,0 +1,6 @@
+.esphome/
+secrets.yaml
+secrets.yml
+
+# MacOS, manually linked dylib
+libcairo.2.dylib
