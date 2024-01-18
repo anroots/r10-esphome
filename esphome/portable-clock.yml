@@ -36,34 +36,17 @@ logger:
 
 
 globals:
-  - id: timer_state_previous
-    type: std::string
-    restore_value: no
-    initial_value: '"idle"'
 
   - id: mode_hass
     type: bool
     restore_value: no
     initial_value: 'true'
-
-  - id: local_minutes_left
-    type: int
-    restore_value: no
-    initial_value: '0'
   
   - id: local_seconds_left
     type: int
     restore_value: no
-    initial_value: '59'
-    
-
-  # 0 - idle
-  # 1 - active
-  # 2 - finished
-  - id: local_state
-    type: int
-    restore_value: no
     initial_value: '0'
+
 
 light:
   - platform: status_led
@@ -327,7 +310,7 @@ sensor:
               return;
             }
 
-            if (strcmp(id(timer_state).state.c_str(), "active") == 0 && strcmp(id(strip).get_effect_name().c_str(), "None") != 0) {
+            if (id(local_state).state == 1 && strcmp(id(strip).get_effect_name().c_str(), "None") != 0) {
               ESP_LOGD("clock.time_left", "Timer is active, disabling the running effect %s", id(strip).get_effect_name().c_str());
               id(strip).turn_on().set_rgb(1,1,1).set_brightness(id(intensity).state).set_effect("none").perform();
               id(strip).turn_off().set_transition_length(0).perform();
@@ -337,23 +320,15 @@ sensor:
 
             int tens = (value % 100) / 10;
             int ones = value % 10;
+
+            float minutes_left = tens * 10 + ones;
+
+            id(local_minutes_left).make_call().set_value(minutes_left).perform();
+
             
-            ESP_LOGD("clock.time_left", "digit2.old=%f; digit2.new=%f; digit1.old=%f; digit1.new=%f", id(digit_2).state, tens, id(digit_1).state, ones);
-            if (id(digit_2).state == 0 && id(digit_1).state == 1 && tens == 0 && ones == 0) {
-              ESP_LOGD("clock.time_left", "Timer has finished (time is up), starting effect");
-              id(strip).turn_on().set_rgb(1,0,0).set_effect("pulse").perform();
-            }
-
-            auto call_2 = id(digit_2).make_call();
-            call_2.set_value(tens);
-            call_2.perform();
-
-            auto call_1 = id(digit_1).make_call();
-            call_1.set_value(ones);
-            call_1.perform();
-  
   - platform: rotary_encoder
     name: "Rotary Encoder"
+    restore_mode: ALWAYS_ZERO
     pin_a:
       number: GPIO13
       mode:
@@ -372,10 +347,14 @@ sensor:
               id(reset).press();
             }
 
-            if (id(local_minutes_left) > 0) {
-              id(local_minutes_left) -= 1;
+            if (id(local_state).state == 3) {
+              id(reset).press();
             }
-            ESP_LOGD("rotary.anticlockwise", "-1 to minutes left; %d minutes left;", id(local_minutes_left));
+
+            if (id(local_minutes_left).state > 0) {
+              id(local_minutes_left).make_call().number_decrement(true).perform();
+            }
+            ESP_LOGD("rotary.anticlockwise", "Decrementing minutes left; %f minutes left;", id(local_minutes_left).state);
     on_clockwise:
       - then:
         - lambda: |-
@@ -384,10 +363,10 @@ sensor:
               id(reset).press();
             }
 
-            if (id(local_minutes_left) < 99) {
-              id(local_minutes_left) += 1;
+            if (id(local_minutes_left).state < 99) {
+              id(local_minutes_left).make_call().number_increment(true).perform();
             }
-            ESP_LOGD("rotary.anticlockwise", "+1 to minutes left; %d minutes left;", id(local_minutes_left));
+            ESP_LOGD("rotary.clockwise", "Incrementing minutes left; %f minutes left;", id(local_minutes_left).state);
           
 text_sensor:
   - platform: homeassistant
@@ -398,7 +377,16 @@ text_sensor:
       then:
         - delay: 1s
         - lambda: |-
-            id(timer_state_previous) = x;
+            int new_local_state = 0;
+
+            if (strcmp(x.c_str(), "active") == 0) {
+              new_local_state = 1;
+            } else if (strcmp(x.c_str(), "paused") == 0) {
+              new_local_state = 0;
+            } else if (strcmp(x.c_str(), "idle") == 0) {
+              new_local_state = 0;
+            }
+            id(local_state).make_call().set_value(new_local_state).perform();
 
   - platform: wifi_info
     ip_address:
@@ -421,8 +409,70 @@ number:
     mode: slider
     optimistic: true
     restore_value: true
-  
-  
+
+  # 0 - idle
+  # 1 - active
+  # 2 - finished
+  # 3 - paused
+  - platform: template
+    internal: true
+    id: local_state
+    update_interval: 1s
+    initial_value: 0
+    min_value: 0
+    max_value: 3
+    step: 1
+    restore_value: false
+    optimistic: true
+    on_value:
+      - then:
+          - lambda: |-
+              int value = (int)x;
+              ESP_LOGD("number.local_state", "New local state is %d", value);
+
+              if (value == 2) {
+                ESP_LOGD("number.local_state", "Timer has finished (time is up), starting effect");
+                id(strip).turn_on().set_rgb(1,0,0).set_effect("pulse").perform();
+              }
+              if (value == 0) {
+                id(strip).turn_on().set_brightness(id(intensity).state).set_effect("none").set_rgb(1,1,1).perform();            
+                id(strip).turn_off().perform();
+              }
+  - platform: template
+    internal: true
+    id: local_minutes_left
+    update_interval: 1s
+    initial_value: 1
+    min_value: 0
+    max_value: 99
+    step: 1
+    restore_value: false
+    optimistic: true
+    on_value:
+      - then:
+          - lambda: |-
+
+              if (id(local_state).state == 0) {
+                return;
+              }
+              
+              int value = (int)x;
+              int tens = (value % 100) / 10;
+              int ones = value % 10;
+
+              ESP_LOGD("number.local_minutes_left", "digit2.old=%f; digit2.new=%f; digit1.old=%f; digit1.new=%f", id(digit_2).state, tens, id(digit_1).state, ones);
+              if (id(digit_2).state == 0 && id(digit_1).state == 1 && tens == 0 && ones == 0 && id(mode_hass)) {
+                ESP_LOGD("number.local_minutes_left", "Timer has finished (time is up), starting effect");
+                id(strip).turn_on().set_rgb(1,0,0).set_effect("pulse").perform();
+              }
+
+              auto call_2 = id(digit_2).make_call();
+              call_2.set_value(tens);
+              call_2.perform();
+
+              auto call_1 = id(digit_1).make_call();
+              call_1.set_value(ones);
+              call_1.perform();
 
   - platform: template
     name: "Digit 1"
@@ -440,14 +490,13 @@ number:
             float g = 1;
             float b = 1;
 
-
-            if (id(time_left).state < 3) {
+            if (id(local_minutes_left).state < 3) {
               g = 0;
               b = 0;
-              ESP_LOGD("clock.digit_1", "time_left.state=%f; changing digit_1 color to red", id(time_left).state);
-            } else if (id(time_left).state < 5) {
+              ESP_LOGD("clock.digit_1", "minutes_left=%f; changing digit_1 color to red", id(local_minutes_left).state);
+            } else if (id(local_minutes_left).state < 5) {
               b = 0;
-              ESP_LOGD("clock.digit_1", "time_left.state=%f; changing digit_1 color to yellow", id(time_left).state);
+              ESP_LOGD("clock.digit_1", "minutes_left=%f; changing digit_1 color to yellow", id(local_minutes_left).state);
             }
             
             if (x == 0) {
@@ -529,13 +578,13 @@ number:
             float g = 1;
             float b = 1;
 
-            if (id(time_left).state < 3) {
+            if (id(local_minutes_left).state < 3) {
               g = 0;
               b = 0;
-              ESP_LOGD("clock.digit_1", "time_left.state=%f; changing digit_2 color to red", id(time_left).state);
-            } else if (id(time_left).state < 5) {
+              ESP_LOGD("clock.digit_1", "minutes_left=%f; changing digit_2 color to red", id(local_minutes_left).state);
+            } else if (id(local_minutes_left).state < 5) {
               b = 0;
-              ESP_LOGD("clock.digit_1", "time_left.state=%f; changing digit_2 color to red", id(time_left).state);
+              ESP_LOGD("clock.digit_1", "minutes_left=%f; changing digit_2 color to red", id(local_minutes_left).state);
             }
             
             if (x == 0) {
@@ -608,9 +657,13 @@ button:
       then:
         - lambda: |-
             ESP_LOGD("clock.reset", "Resetting RGB lights");
+            id(local_minutes_left).make_call().set_value(1).perform();
+            id(local_seconds_left) = 0;
             id(strip).turn_on().set_brightness(id(intensity).state).set_effect("none").set_rgb(1,1,1).perform();            
             id(strip).turn_off().perform();
             id(status_light).turn_on().perform();
+            id(local_state).make_call().set_value(0).perform();
+            id(local_timer_tick).stop();
 
 binary_sensor:
   - platform: gpio
@@ -624,14 +677,15 @@ binary_sensor:
     name: "Encoder Switch"
     on_press:
       then:
+
         - lambda: |-
-            if (id(local_state) == 0) {
-              id(local_state) = 1;
-              id(local_seconds_left) = 11;
+            if (id(local_state).state == 0) {
+              id(strip).turn_on().set_brightness(id(intensity).state).set_effect("none").set_rgb(1,1,1).perform();
+              id(strip).turn_off().perform();
+              id(local_state).make_call().set_value(1).perform();
+              id(local_seconds_left) = 0;
               id(local_timer_tick).execute();
             } else {
-              id(local_state) = 0;
-              id(local_seconds_left) = 59;
               id(reset).press();
             }
 script:
@@ -642,22 +696,22 @@ script:
       - lambda: |-
           id(local_seconds_left) -= 1;
 
-          if (id(local_seconds_left) == 0 && id(local_minutes_left) == 0) {
-            id(local_state) = 2;
+          if (id(local_seconds_left) == 0 && id(local_minutes_left).state == 0) {
+            id(local_state).make_call().set_value(2).perform();
             ESP_LOGD("clock.local_tick", "Timer FINISHED");
             return;
           }
 
           if (id(local_seconds_left) <= 0) {
-            id(local_minutes_left) -= 1;
+            id(local_minutes_left).make_call().number_decrement(true).perform();
             id(local_seconds_left) = 59;
           }
 
-          if (id(local_state) == 1) {
+          if (id(local_state).state == 1) {
             id(local_timer_tick).execute();
           }
           
-          ESP_LOGD("clock.local_tick", "local time left: minutes=%d, seconds=%d", id(local_minutes_left), id(local_seconds_left));
+          ESP_LOGD("clock.local_tick", "local time left: minutes=%d, seconds=%d", id(local_minutes_left).state, id(local_seconds_left));
         
 i2c:
   sda: 17
@@ -671,7 +725,7 @@ display:
     model: "SSD1306 128x64"
     address: 0x3C
     update_interval: 500ms
-    rotation: 180
+    rotation: 0
     lambda: |-
       it.clear();
       
@@ -685,21 +739,22 @@ display:
       it.line(5, 20, 123, 20);
       
       if (id(mode_hass)) {
-        if (strcmp(id(timer_state).state.c_str(), "active") == 0) {
+        if (id(local_state).state == 1) {
           it.image(10, 25, id(timer_play));
           it.printf(60, 25, id(roboto_lg), "%02.0f", id(time_left).state);
-        } else if (strcmp(id(timer_state).state.c_str(), "paused") == 0) {
+        } else if (id(local_state).state == 3) {
           it.image(10, 25, id(timer_paused));
           it.printf(60, 25, id(roboto_lg), "%02.0f", id(time_left).state);
         } else {
           it.image(50, 25, id(loading));
         }
       } else {
-        it.printf(45, 25, id(roboto_md), "%02d:%02d", id(local_minutes_left), id(local_seconds_left));
+
+        it.printf(45, 25, id(roboto_md), "%02.0f:%02d", id(local_minutes_left).state, id(local_seconds_left));
               
-        if (id(local_state) == 1) {
+        if (id(local_state).state == 1) {
           it.image(4, 25, id(timer_play));
-        } else if (id(local_state) == 0) {
+        } else if (id(local_state).state == 0) {
           it.image(4, 25, id(timer_paused));
         } else {
           it.image(4, 25, id(loading));
