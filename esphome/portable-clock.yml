@@ -46,6 +46,25 @@ globals:
     restore_value: no
     initial_value: 'true'
 
+  - id: local_minutes_left
+    type: int
+    restore_value: no
+    initial_value: '0'
+  
+  - id: local_seconds_left
+    type: int
+    restore_value: no
+    initial_value: '59'
+    
+
+  # 0 - idle
+  # 1 - active
+  # 2 - finished
+  - id: local_state
+    type: int
+    restore_value: no
+    initial_value: '0'
+
 light:
   - platform: status_led
     name: "Status LED"
@@ -304,6 +323,9 @@ sensor:
       then:
         - lambda: |-
 
+            if (id(mode_hass) == false) {
+              return;
+            }
 
             if (strcmp(id(timer_state).state.c_str(), "active") == 0 && strcmp(id(strip).get_effect_name().c_str(), "None") != 0) {
               ESP_LOGD("clock.time_left", "Timer is active, disabling the running effect %s", id(strip).get_effect_name().c_str());
@@ -342,6 +364,31 @@ sensor:
       mode:
         input: true
         pullup: true
+    on_anticlockwise:
+      - then:
+        - lambda: |-
+            if (id(mode_hass)) {
+              id(mode_hass) = false;
+              id(reset).press();
+            }
+
+            if (id(local_minutes_left) > 0) {
+              id(local_minutes_left) -= 1;
+            }
+            ESP_LOGD("rotary.anticlockwise", "-1 to minutes left; %d minutes left;", id(local_minutes_left));
+    on_clockwise:
+      - then:
+        - lambda: |-
+            if (id(mode_hass)) {
+              id(mode_hass) = false;
+              id(reset).press();
+            }
+
+            if (id(local_minutes_left) < 99) {
+              id(local_minutes_left) += 1;
+            }
+            ESP_LOGD("rotary.anticlockwise", "+1 to minutes left; %d minutes left;", id(local_minutes_left));
+          
 text_sensor:
   - platform: homeassistant
     id: timer_state
@@ -374,7 +421,8 @@ number:
     mode: slider
     optimistic: true
     restore_value: true
-    
+  
+  
 
   - platform: template
     name: "Digit 1"
@@ -574,9 +622,43 @@ binary_sensor:
       inverted: true
     id: encoder_switch
     name: "Encoder Switch"
-#    on_turn_on:
-#      - delay: 200ms
-#      - switch.turn_off: encoder_switch
+    on_press:
+      then:
+        - lambda: |-
+            if (id(local_state) == 0) {
+              id(local_state) = 1;
+              id(local_seconds_left) = 11;
+              id(local_timer_tick).execute();
+            } else {
+              id(local_state) = 0;
+              id(local_seconds_left) = 59;
+              id(reset).press();
+            }
+script:
+  - id: local_timer_tick
+    mode: queued
+    then:
+      - delay: 1s
+      - lambda: |-
+          id(local_seconds_left) -= 1;
+
+          if (id(local_seconds_left) == 0 && id(local_minutes_left) == 0) {
+            id(local_state) = 2;
+            ESP_LOGD("clock.local_tick", "Timer FINISHED");
+            return;
+          }
+
+          if (id(local_seconds_left) <= 0) {
+            id(local_minutes_left) -= 1;
+            id(local_seconds_left) = 59;
+          }
+
+          if (id(local_state) == 1) {
+            id(local_timer_tick).execute();
+          }
+          
+          ESP_LOGD("clock.local_tick", "local time left: minutes=%d, seconds=%d", id(local_minutes_left), id(local_seconds_left));
+        
 i2c:
   sda: 17
   scl: 16
@@ -588,7 +670,8 @@ display:
   - platform: ssd1306_i2c
     model: "SSD1306 128x64"
     address: 0x3C
-    update_interval: 1s
+    update_interval: 500ms
+    rotation: 180
     lambda: |-
       it.clear();
       
@@ -597,18 +680,30 @@ display:
         it.print(95, 5, id(roboto), "HASS");
       } else {
         it.print(5, 5, id(roboto), "Mode");
-        it.print(5, 65, id(roboto), "LOCAL");
+        it.print(85, 5, id(roboto), "LOCAL");
       }
       it.line(5, 20, 123, 20);
       
-      if (strcmp(id(timer_state).state.c_str(), "active") == 0) {
-        it.image(10, 25, id(timer_play));
-        it.printf(60, 25, id(roboto_lg), "%02.0f", id(time_left).state);
-      } else if (strcmp(id(timer_state).state.c_str(), "paused") == 0) {
-        it.image(10, 25, id(timer_paused));
-        it.printf(60, 25, id(roboto_lg), "%02.0f", id(time_left).state);
+      if (id(mode_hass)) {
+        if (strcmp(id(timer_state).state.c_str(), "active") == 0) {
+          it.image(10, 25, id(timer_play));
+          it.printf(60, 25, id(roboto_lg), "%02.0f", id(time_left).state);
+        } else if (strcmp(id(timer_state).state.c_str(), "paused") == 0) {
+          it.image(10, 25, id(timer_paused));
+          it.printf(60, 25, id(roboto_lg), "%02.0f", id(time_left).state);
+        } else {
+          it.image(50, 25, id(loading));
+        }
       } else {
-        it.image(50, 25, id(loading));
+        it.printf(45, 25, id(roboto_md), "%02d:%02d", id(local_minutes_left), id(local_seconds_left));
+              
+        if (id(local_state) == 1) {
+          it.image(4, 25, id(timer_play));
+        } else if (id(local_state) == 0) {
+          it.image(4, 25, id(timer_paused));
+        } else {
+          it.image(4, 25, id(loading));
+        }
       }
 
 image:
@@ -629,3 +724,6 @@ font:
   - file: "gfonts://Roboto@900"
     id: roboto_lg
     size: 32
+  - file: "gfonts://Roboto@900"
+    id: roboto_md
+    size: 28
