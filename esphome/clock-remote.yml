@@ -1,0 +1,129 @@
+
+api:
+  encryption:
+    key: !secret clock_remote_encryption_key
+  id: home_assistant
+
+ota:
+  password: !secret clock_remote_ota_password
+
+esphome:
+  name: clock-remote
+  friendly_name: clock-remote
+
+esp8266:
+  board: d1_mini
+
+# Enable logging
+logger:
+  level: INFO
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: 192.168.0.51
+    subnet: 255.255.255.0
+    gateway: 192.168.0.1
+
+# https://randomnerdtutorials.com/esp8266-pinout-reference-gpios/
+# https://esphome.io/components/display/tm1637.html
+# https://esphome.io/components/sensor/rotary_encoder.html?highlight=rotary
+# https://esphome.io/components/binary_sensor/gpio.html
+
+globals:
+  # 0 - standby
+  # 1 - running
+  # 2 - just finished
+  - id: timer_internal_state
+    initial_value: "0"
+    type: int
+  - id: time_left
+    initial_value: "0"
+    type: int
+
+display:
+    platform: tm1637
+    id: tm1637_display
+    clk_pin: D0
+    dio_pin: D2
+    length: 4
+    update_interval: 500ms
+    lambda: |-
+      static int connection_counter = 0;
+      static bool clock_colon = true;
+      int divider = 0;
+      
+      if (id(time_left) > 959) {
+        divider = 100;
+        ESP_LOGD("custom", "divider 100");
+      } else {
+        divider = 100;
+        ESP_LOGD("custom", "divider 10");
+      }
+
+      if (id(home_assistant).is_connected()) {
+        if (clock_colon && id(stage_clock_state).state == "active") {
+          
+        } else {
+        
+        }
+        it.printf(0, "%4d", 234);
+        clock_colon = !clock_colon;
+      } else {
+
+        connection_counter++;
+
+        if (connection_counter == 1) {
+           it.print("___-");
+        } else if (connection_counter == 2) {
+          it.print("__-_");
+        } else if (connection_counter == 3) {
+          it.print("_-__");
+        } else if (connection_counter == 4) {
+          it.print("-___");
+        } else {
+          connection_counter = 0;
+          it.print("____");
+        }
+      }
+        
+sensor:
+  - platform: rotary_encoder
+    name: encoder
+    id: encoder
+    pin_a: D1
+    pin_b: D5
+    publish_initial_value: true
+
+binary_sensor:
+  - platform: gpio
+    name: enter
+    pin:
+      number: D3
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    on_press:
+      then:
+        - lambda: |-
+            id(timer_internal_state) = 1;
+
+text_sensor:
+  - platform: homeassistant
+    id: stage_clock_time_left
+    internal: true
+    entity_id: sensor.stage_clock_time_left
+    on_value:
+      then:
+        - lambda: |-
+            id(time_left) = atoi(x.c_str());
+  - platform: homeassistant
+    id: stage_clock_state
+    internal: true
+    entity_id: timer.stage_clock
+
+
+
+    
