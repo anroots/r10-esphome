@@ -51,6 +51,14 @@ display:
           it.printf( "%02.0f%02.0f", id(local_minutes_left).state, id(local_seconds_left).state);
         }
         
+        if (id(local_state).state == 2) {
+          if (clock_colon) {
+            it.print("----");
+          } else {
+            it.print("0000");
+          }
+        }
+        
         clock_colon = !clock_colon;
       } else {
 
@@ -152,6 +160,10 @@ sensor:
         - lambda: |-
             int value = (int)x;
             id(local_seconds_left).make_call().set_value(value).perform();
+
+            if (id(local_minutes_left).state == 0 && value <= 1) {
+                id(local_state).make_call().set_value(2).perform();
+            }
 
 binary_sensor:
   - platform: gpio
