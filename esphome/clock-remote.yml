@@ -21,26 +21,16 @@ logger:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  manual_ip:
-    static_ip: 192.168.0.51
-    subnet: 255.255.255.0
-    gateway: 192.168.0.1
+  #manual_ip:
+  #  static_ip: 192.168.25.2
+  #  subnet: 255.255.255.0
+  #  gateway: 192.168.25.100
 
 # https://randomnerdtutorials.com/esp8266-pinout-reference-gpios/
 # https://esphome.io/components/display/tm1637.html
 # https://esphome.io/components/sensor/rotary_encoder.html?highlight=rotary
 # https://esphome.io/components/binary_sensor/gpio.html
 
-globals:
-  # 0 - standby
-  # 1 - running
-  # 2 - just finished
-  - id: timer_internal_state
-    initial_value: "0"
-    type: int
-  - id: time_left
-    initial_value: "0"
-    type: int
 
 display:
     platform: tm1637
@@ -52,23 +42,15 @@ display:
     lambda: |-
       static int connection_counter = 0;
       static bool clock_colon = true;
-      int divider = 0;
-      
-      if (id(time_left) > 959) {
-        divider = 100;
-        ESP_LOGD("custom", "divider 100");
-      } else {
-        divider = 100;
-        ESP_LOGD("custom", "divider 10");
-      }
 
       if (id(home_assistant).is_connected()) {
-        if (clock_colon && id(stage_clock_state).state == "active") {
-          
+        ESP_LOGD("display.tick", "minutes=%f, seconds=%f", id(local_minutes_left).state, id(local_seconds_left).state);
+        if (clock_colon && id(local_state).state == 1) {
+          it.printf( "%02.0f.%02.0f", id(local_minutes_left).state, id(local_seconds_left).state);
         } else {
-        
+          it.printf( "%02.0f%02.0f", id(local_minutes_left).state, id(local_seconds_left).state);
         }
-        it.printf(0, "%4d", 234);
+        
         clock_colon = !clock_colon;
       } else {
 
@@ -87,7 +69,54 @@ display:
           it.print("____");
         }
       }
-        
+
+number:
+  - platform: template
+    internal: true
+    id: local_minutes_left
+    update_interval: 1s
+    initial_value: 1
+    min_value: 0
+    max_value: 99
+    step: 1
+    restore_value: false
+    optimistic: true
+   
+  
+  - platform: template
+    internal: true
+    id: local_seconds_left
+    update_interval: 1s
+    initial_value: 1
+    min_value: 0
+    max_value: 59
+    step: 1
+    restore_value: false
+    optimistic: true
+
+  # 0 - idle
+  # 1 - active
+  # 2 - finished
+  # 3 - paused
+  - platform: template
+    internal: true
+    id: local_state
+    update_interval: 1s
+    initial_value: 0
+    min_value: 0
+    max_value: 3
+    step: 1
+    restore_value: false
+    optimistic: true
+    on_value:
+      - then:
+          - lambda: |-
+              int value = (int)x;
+              ESP_LOGD("number.local_state", "New local state is %d", value);
+
+              if (value == 2) {
+                ESP_LOGD("number.local_state", "Timer has finished (time is up)");
+              }
 sensor:
   - platform: rotary_encoder
     name: encoder
@@ -95,6 +124,34 @@ sensor:
     pin_a: D1
     pin_b: D5
     publish_initial_value: true
+  
+  - platform: homeassistant
+    id: minutes_left
+    entity_id: sensor.stage_clock_minutes_left
+    internal: true
+    on_value:
+      then:
+        # We substract one minute, because HA rounds up seconds into full minutes
+        # (for the "stage-clock", which only shows minutes).
+        # "clock-remote" also shows seconds, so we don't need the ceil rounding here
+        - lambda: |-
+            int value = (int)x - 1;
+            
+            if (value < 0) {
+              value = 0;
+            }
+
+            id(local_minutes_left).make_call().set_value(value).perform();
+
+  - platform: homeassistant
+    id: seconds_left
+    entity_id: sensor.stage_clock_seconds_left
+    internal: true
+    on_value:
+      then:
+        - lambda: |-
+            int value = (int)x;
+            id(local_seconds_left).make_call().set_value(value).perform();
 
 binary_sensor:
   - platform: gpio
@@ -108,22 +165,25 @@ binary_sensor:
     on_press:
       then:
         - lambda: |-
-            id(timer_internal_state) = 1;
 
 text_sensor:
   - platform: homeassistant
-    id: stage_clock_time_left
+    id: timer_state
+    entity_id: timer.stage_clock
     internal: true
-    entity_id: sensor.stage_clock_time_left
     on_value:
       then:
+        - delay: 1s
         - lambda: |-
-            id(time_left) = atoi(x.c_str());
-  - platform: homeassistant
-    id: stage_clock_state
-    internal: true
-    entity_id: timer.stage_clock
+            int new_local_state = 0;
 
-
+            if (strcmp(x.c_str(), "active") == 0) {
+              new_local_state = 1;
+            } else if (strcmp(x.c_str(), "paused") == 0) {
+              new_local_state = 0;
+            } else if (strcmp(x.c_str(), "idle") == 0) {
+              new_local_state = 0;
+            }
+            id(local_state).make_call().set_value(new_local_state).perform();
 
     
