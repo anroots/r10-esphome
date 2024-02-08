@@ -16,7 +16,7 @@ esp8266:
 
 # Enable logging
 logger:
-  level: INFO
+  level: DEBUG
 
 wifi:
   ssid: !secret wifi_ssid
@@ -44,7 +44,7 @@ display:
       static bool clock_colon = true;
 
       if (id(home_assistant).is_connected()) {
-        ESP_LOGD("display.tick", "minutes=%f, seconds=%f", id(local_minutes_left).state, id(local_seconds_left).state);
+        ESP_LOGD("display.tick", "minutes=%f, seconds=%d", id(local_minutes_left).state, id(local_seconds_left).state);
         if (clock_colon && id(local_state).state == 1) {
           it.printf( "%02.0f.%02.0f", id(local_minutes_left).state, id(local_seconds_left).state);
         } else {
@@ -132,6 +132,31 @@ sensor:
     pin_a: D1
     pin_b: D5
     publish_initial_value: true
+    on_anticlockwise:
+      - then:
+        - lambda: |-
+            if (id(local_state).state != 0) {
+              id(stop_timer).execute();
+            }
+            int new_minutes = id(local_minutes_left).state + 1;
+            if (new_minutes >= 99) {
+              new_minutes = 99;
+            }
+
+            id(local_minutes_left).make_call().set_value(new_minutes).perform();
+    on_clockwise:
+      - then:
+        - lambda: |-
+            if (id(local_state).state != 0) {
+              id(stop_timer).execute();
+            }
+
+            int new_minutes = id(local_minutes_left).state - 1;
+            if (new_minutes <= 0) {
+              new_minutes = 0;
+            }
+
+            id(local_minutes_left).make_call().set_value(new_minutes).perform();
   
   - platform: homeassistant
     id: minutes_left
@@ -165,6 +190,43 @@ sensor:
                 id(local_state).make_call().set_value(2).perform();
             }
 
+script:
+  - id: stop_timer
+    then:
+      - lambda: |-
+          ESP_LOGD("button.enter", "Cancelling running timer");
+
+          HomeassistantServiceResponse resp;
+          resp.service = "timer.cancel";
+          HomeassistantServiceMap entity_id_kv;
+          entity_id_kv.key = "entity_id";
+          entity_id_kv.value = "timer.stage_clock";
+
+          resp.data.push_back(entity_id_kv);
+          id(home_assistant).send_homeassistant_service_call(resp);
+  - id: start_timer
+    then:
+      - lambda: |-
+
+          HomeassistantServiceResponse resp;
+          resp.service = "timer.start";
+          HomeassistantServiceMap entity_id_kv;
+          
+          entity_id_kv.key = "entity_id";
+          entity_id_kv.value = "timer.stage_clock";
+          resp.data.push_back(entity_id_kv);
+
+          char duration[16];  
+          sprintf(duration, "0:%02.0f:00", id(local_minutes_left).state);
+          ESP_LOGD("button.enter", "Starting timer, duration will be %s", duration);
+
+
+          entity_id_kv.key = "duration";
+          entity_id_kv.value = duration;
+          resp.data.push_back(entity_id_kv);
+
+          id(home_assistant).send_homeassistant_service_call(resp);
+
 binary_sensor:
   - platform: gpio
     name: enter
@@ -177,6 +239,13 @@ binary_sensor:
     on_press:
       then:
         - lambda: |-
+            ESP_LOGD("button.enter", "Button press, local state is %f", id(local_state).state);
+      
+            if (id(local_state).state != 0) {
+              id(stop_timer).execute();
+            } else {
+              id(start_timer).execute();
+            }
 
 text_sensor:
   - platform: homeassistant
