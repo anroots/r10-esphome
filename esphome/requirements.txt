@@ -23,6 +23,6 @@ pyparsing >= 3.0
 # For autocompletion
 argcomplete>=2.0.0
 
-esphome==2024.2.2
+esphome==2024.3.0
 pillow==10.1.0
 cairosvg==2.7.1
