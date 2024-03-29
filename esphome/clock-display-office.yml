@@ -1,22 +1,22 @@
 
 api:
   encryption:
-    key: !secret clock_remote_encryption_key
+    key: !secret clock_display_office_encryption_key
   id: home_assistant
 
 ota:
-  password: !secret clock_remote_ota_password
+  password: !secret clock_display_office_ota_password
 
 esphome:
-  name: clock-remote
-  friendly_name: clock-remote
+  name: clock-display-office
+  friendly_name: clock-display-office
 
 esp8266:
   board: d1_mini
 
 # Enable logging
 logger:
-  level: DEBUG
+  level: INFO
 
 wifi:
   ssid: !secret wifi_ssid
@@ -28,15 +28,14 @@ wifi:
 
 # https://randomnerdtutorials.com/esp8266-pinout-reference-gpios/
 # https://esphome.io/components/display/tm1637.html
-# https://esphome.io/components/sensor/rotary_encoder.html?highlight=rotary
 # https://esphome.io/components/binary_sensor/gpio.html
-
 
 display:
     platform: tm1637
     id: tm1637_display
-    clk_pin: D0
+    clk_pin: D1
     dio_pin: D2
+    inverted: true
     length: 4
     update_interval: 500ms
     lambda: |-
@@ -44,10 +43,13 @@ display:
       static bool clock_colon = true;
 
       if (id(home_assistant).is_connected()) {
-        if (clock_colon && id(local_state).state == 1) {
-          it.printf( "%02.0f.%02.0f", id(local_minutes_left).state, id(local_seconds_left).state);
-        } else {
-          it.printf( "%02.0f%02.0f", id(local_minutes_left).state, id(local_seconds_left).state);
+
+        if (id(local_state).state == 1) {
+          if (clock_colon) {
+            it.printf( "%02.0f.%02.0f", id(local_minutes_left).state, id(local_seconds_left).state);
+          } else {
+            it.printf( "%02.0f%02.0f", id(local_minutes_left).state, id(local_seconds_left).state);
+          }
         }
         
         if (id(local_state).state == 2) {
@@ -56,6 +58,10 @@ display:
           } else {
             it.print("0000");
           }
+        }
+
+        if (id(local_state).state == 0 || id(local_state).state == 3) {
+          it.print("    ");
         }
         
         clock_colon = !clock_colon;
@@ -125,38 +131,7 @@ number:
                 ESP_LOGD("number.local_state", "Timer has finished (time is up)");
               }
 sensor:
-  - platform: rotary_encoder
-    name: encoder
-    id: encoder
-    pin_a: D1
-    pin_b: D5
-    publish_initial_value: true
-    on_anticlockwise:
-      - then:
-        - lambda: |-
-            if (id(local_state).state != 0) {
-              id(stop_timer).execute();
-            }
-            int new_minutes = id(local_minutes_left).state + 1;
-            if (new_minutes >= 99) {
-              new_minutes = 99;
-            }
 
-            id(local_minutes_left).make_call().set_value(new_minutes).perform();
-    on_clockwise:
-      - then:
-        - lambda: |-
-            if (id(local_state).state != 0) {
-              id(stop_timer).execute();
-            }
-
-            int new_minutes = id(local_minutes_left).state - 1;
-            if (new_minutes <= 0) {
-              new_minutes = 0;
-            }
-
-            id(local_minutes_left).make_call().set_value(new_minutes).perform();
-  
   - platform: homeassistant
     id: minutes_left
     entity_id: sensor.stage_clock_minutes_left
@@ -189,62 +164,7 @@ sensor:
                 id(local_state).make_call().set_value(2).perform();
             }
 
-script:
-  - id: stop_timer
-    then:
-      - lambda: |-
-          ESP_LOGD("button.enter", "Cancelling running timer");
 
-          HomeassistantServiceResponse resp;
-          resp.service = "timer.cancel";
-          HomeassistantServiceMap entity_id_kv;
-          entity_id_kv.key = "entity_id";
-          entity_id_kv.value = "timer.stage_clock";
-
-          resp.data.push_back(entity_id_kv);
-          id(home_assistant).send_homeassistant_service_call(resp);
-  - id: start_timer
-    then:
-      - lambda: |-
-
-          HomeassistantServiceResponse resp;
-          resp.service = "timer.start";
-          HomeassistantServiceMap entity_id_kv;
-          
-          entity_id_kv.key = "entity_id";
-          entity_id_kv.value = "timer.stage_clock";
-          resp.data.push_back(entity_id_kv);
-
-          char duration[16];  
-          sprintf(duration, "0:%02.0f:00", id(local_minutes_left).state);
-          ESP_LOGD("button.enter", "Starting timer, duration will be %s", duration);
-
-
-          entity_id_kv.key = "duration";
-          entity_id_kv.value = duration;
-          resp.data.push_back(entity_id_kv);
-
-          id(home_assistant).send_homeassistant_service_call(resp);
-
-binary_sensor:
-  - platform: gpio
-    name: enter
-    pin:
-      number: D3
-      inverted: true
-      mode:
-        input: true
-        pullup: true
-    on_press:
-      then:
-        - lambda: |-
-            ESP_LOGD("button.enter", "Button press, local state is %f", id(local_state).state);
-      
-            if (id(local_state).state != 0) {
-              id(stop_timer).execute();
-            } else {
-              id(start_timer).execute();
-            }
 
 text_sensor:
   - platform: homeassistant
