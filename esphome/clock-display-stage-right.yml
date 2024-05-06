@@ -1,0 +1,220 @@
+
+api:
+  encryption:
+    key: !secret clock_display_stage_right_encryption_key
+  id: home_assistant
+
+ota:
+  password: !secret clock_display_stage_right_ota_password
+
+esphome:
+  name: clock-display-stage-right
+  friendly_name: clock-display-stage-right
+  on_boot:
+    then:
+      - switch.turn_on: led_pwr
+
+esp8266:
+  board: d1_mini
+
+# Enable logging
+logger:
+  level: DEBUG
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  #manual_ip:
+  #  static_ip: 192.168.25.2
+  #  subnet: 255.255.255.0
+  #  gateway: 192.168.25.100
+
+# https://randomnerdtutorials.com/esp8266-pinout-reference-gpios/
+# https://esphome.io/components/display/tm1637.html
+# https://esphome.io/components/binary_sensor/gpio.html
+
+output:
+  - platform: esp8266_pwm
+    id: red
+    pin: D5
+    inverted: true
+  - platform: esp8266_pwm
+    id: blue
+    pin: D7
+    inverted: true
+  - platform: esp8266_pwm
+    id: green
+    pin: D6
+    inverted: true
+
+  - platform: gpio
+    pin: D4
+    id: led_pwr_out
+switch:
+  - platform: output
+    name: "LED PWR"
+    id: led_pwr
+    output: led_pwr_out
+    internal: true
+
+light:
+  - platform: rgb
+    name: "rgb_led"
+    red: red
+    green: green
+    blue: blue
+display:
+    platform: tm1637
+    id: tm1637_display
+    clk_pin: D1
+    dio_pin: D2
+    length: 4
+    update_interval: 1000ms
+    lambda: |-
+      static int connection_counter = 0;
+      static bool clock_colon = true;
+
+      if (id(home_assistant).is_connected()) {
+        if (clock_colon && id(local_state).state == 1) {
+          it.printf( "%02.0f.%02.0f", id(local_minutes_left).state, id(local_seconds_left).state);
+        } else {
+          it.printf( "%02.0f%02.0f", id(local_minutes_left).state, id(local_seconds_left).state);
+        }
+        
+        if (id(local_state).state == 2) {
+          if (clock_colon) {
+            it.print("----");
+          } else {
+            it.print("0000");
+          }
+        }
+        
+        clock_colon = !clock_colon;
+      } else {
+
+        connection_counter++;
+
+        if (connection_counter == 1) {
+           it.print("___-");
+           id(red).turn_on();
+        } else if (connection_counter == 2) {
+          it.print("__-_");
+          id(red).turn_off();
+          id(blue).turn_on();
+        } else if (connection_counter == 3) {
+          it.print("_-__");
+          id(blue).turn_off();
+          id(green).turn_on();
+        } else if (connection_counter == 4) {
+          it.print("-___");
+          id(green).turn_off();
+        } else {
+          connection_counter = 0;
+          it.print("____");
+        }
+      }
+
+number:
+  - platform: template
+    internal: true
+    id: local_minutes_left
+    update_interval: 1s
+    initial_value: 1
+    min_value: 0
+    max_value: 99
+    step: 1
+    restore_value: false
+    optimistic: true
+   
+  
+  - platform: template
+    internal: true
+    id: local_seconds_left
+    update_interval: 1s
+    initial_value: 1
+    min_value: 0
+    max_value: 59
+    step: 1
+    restore_value: false
+    optimistic: true
+
+  # 0 - idle
+  # 1 - active
+  # 2 - finished
+  # 3 - paused
+  - platform: template
+    internal: true
+    id: local_state
+    update_interval: 1s
+    initial_value: 0
+    min_value: 0
+    max_value: 3
+    step: 1
+    restore_value: false
+    optimistic: true
+    on_value:
+      - then:
+          - lambda: |-
+              int value = (int)x;
+              ESP_LOGD("number.local_state", "New local state is %d", value);
+
+              if (value == 2) {
+                ESP_LOGD("number.local_state", "Timer has finished (time is up)");
+              }
+sensor:
+
+  - platform: homeassistant
+    id: minutes_left
+    entity_id: sensor.stage_clock_minutes_left
+    internal: true
+    on_value:
+      then:
+        # We substract one minute, because HA rounds up seconds into full minutes
+        # (for the "stage-clock", which only shows minutes).
+        # "clock-remote" also shows seconds, so we don't need the ceil rounding here
+        - lambda: |-
+            int value = (int)x - 1;
+            
+            if (value < 0) {
+              value = 0;
+            }
+
+            id(local_minutes_left).make_call().set_value(value).perform();
+
+  - platform: homeassistant
+    id: seconds_left
+    entity_id: sensor.stage_clock_seconds_left
+    internal: true
+    on_value:
+      then:
+        - lambda: |-
+            int value = (int)x;
+            id(local_seconds_left).make_call().set_value(value).perform();
+
+            if (id(local_minutes_left).state == 0 && value <= 1) {
+                id(local_state).make_call().set_value(2).perform();
+            }
+
+
+
+text_sensor:
+  - platform: homeassistant
+    id: timer_state
+    entity_id: timer.stage_clock
+    internal: true
+    on_value:
+      then:
+        - delay: 1s
+        - lambda: |-
+            int new_local_state = 0;
+
+            if (strcmp(x.c_str(), "active") == 0) {
+              new_local_state = 1;
+            } else if (strcmp(x.c_str(), "paused") == 0) {
+              new_local_state = 0;
+            } else if (strcmp(x.c_str(), "idle") == 0) {
+              new_local_state = 0;
+            }
+            id(local_state).make_call().set_value(new_local_state).perform();
+
+    
