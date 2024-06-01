@@ -4,22 +4,16 @@ api:
     key: !secret clock_display_stage_right_encryption_key
   id: home_assistant
 
-ota:
-  password: !secret clock_display_stage_right_ota_password
-
 esphome:
   name: clock-display-stage-right
   friendly_name: clock-display-stage-right
-  on_boot:
-    then:
-      - switch.turn_on: led_pwr
 
 esp8266:
   board: d1_mini
 
 # Enable logging
 logger:
-  level: DEBUG
+  level: INFO
 
 wifi:
   ssid: !secret wifi_ssid
@@ -40,36 +34,40 @@ output:
     inverted: true
   - platform: esp8266_pwm
     id: blue
-    pin: D7
+    pin: D6
     inverted: true
   - platform: esp8266_pwm
     id: green
-    pin: D6
+    pin: D7
     inverted: true
-
-  - platform: gpio
-    pin: D4
-    id: led_pwr_out
-switch:
-  - platform: output
-    name: "LED PWR"
-    id: led_pwr
-    output: led_pwr_out
-    internal: true
-
 light:
   - platform: rgb
     name: "rgb_led"
     red: red
     green: green
     blue: blue
+    effects:
+      - pulse:
+          name: "fast_red_pulse"
+          transition_length: 0.1s
+          update_interval: 0.3s
+          min_brightness: 0%
+          max_brightness: 100%
+      - pulse:
+          name: "slow_red_pulse"
+          transition_length: 0.4s
+          update_interval: 0.8s
+          min_brightness: 0%
+          max_brightness: 100%
+      
 display:
     platform: tm1637
     id: tm1637_display
     clk_pin: D1
     dio_pin: D2
     length: 4
-    update_interval: 1000ms
+    intensity: 0
+    update_interval: 500ms
     lambda: |-
       static int connection_counter = 0;
       static bool clock_colon = true;

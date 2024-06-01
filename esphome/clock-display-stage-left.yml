@@ -16,7 +16,7 @@ esp8266:
 
 # Enable logging
 logger:
-  level: DEBUG
+  level: INFO
 
 wifi:
   ssid: !secret wifi_ssid
@@ -37,11 +37,11 @@ output:
     inverted: true
   - platform: esp8266_pwm
     id: blue
-    pin: D6
+    pin: D7
     inverted: true
   - platform: esp8266_pwm
     id: green
-    pin: D7
+    pin: D6
     inverted: true
 light:
   - platform: rgb
@@ -49,12 +49,27 @@ light:
     red: red
     green: green
     blue: blue
+    effects:
+      - pulse:
+          name: "fast_red_pulse"
+          transition_length: 0.1s
+          update_interval: 0.3s
+          min_brightness: 0%
+          max_brightness: 100%
+      - pulse:
+          name: "slow_red_pulse"
+          transition_length: 0.4s
+          update_interval: 0.8s
+          min_brightness: 0%
+          max_brightness: 100%
+      
 display:
     platform: tm1637
     id: tm1637_display
     clk_pin: D1
     dio_pin: D2
     length: 4
+    intensity: 0
     update_interval: 500ms
     lambda: |-
       static int connection_counter = 0;
